@@ -159,19 +159,28 @@ async def get_parsed_html(url):
         parsed_html = BeautifulSoup(html, 'lxml')
         return parsed_html
 
-def send_odds_to_telegram_chat(odds, telepot_bot):
+def get_updates_from_bot(telepot_bot, offset=0):
     print(telepot_bot.getMe())
-    with dbm.open(CACHE_FILE, 'c') as chat_ids_store:
-        existing_ids = json.loads(chat_ids_store.get('ids', '[]').decode())
-        updates = telepot_bot.getUpdates()
-        ids_from_updates = list(map(lambda x: x['message']['chat']['id'], updates))
-        ids = list(set(existing_ids + ids_from_updates))
-        chat_ids_store['ids'] = json.dumps(ids)
+    # with dbm.open(CACHE_FILE, 'c') as chat_ids_store:
+    #     existing_ids = json.loads(chat_ids_store.get('ids', b'[]').decode())
+    updates = telepot_bot.getUpdates(offset=offset)
+    print(updates)
+    offset = max(map(int, [u['update_id'] for u in updates])) + 1 if updates else 0
+    print(offset)
+    ids_from_updates = list(map(lambda x: x['message']['chat']['id'], updates))
+    messages = list(map(lambda x: x['message']['text'], updates))
+    ids_msg = list(zip(ids_from_updates, messages))
+#    ids = list(set(existing_ids + ids_from_updates))
+#    chat_ids_store['ids'] = json.dumps(ids)
+    ids = list(set(ids_from_updates))
+    subscribes = set([i for i, msg in ids_msg if msg == 'start'])
+    unsubscribes = set([i for i, msg in ids_msg if msg == 'stop'])
+    print ("Subscribes: {}".format(subscribes))
+    print ("Unsubscribes: {}".format(unsubscribes))
 
     print(ids)
-    print(odds)
-    for chat_id in ids:
-        telepot_bot.sendMessage(chat_id, odds)
+
+    return (offset, subscribes, unsubscribes)
 
 async def get_odds_by_classnames(parsed_html, comm_tag, odd_tag, command_class, odd_class):
     odds = []
@@ -257,6 +266,8 @@ def format_odds(site_odds):
 async def main(loop):
     tp_executor = concurrent.futures.ThreadPoolExecutor(max_workers=3)
     bot = telepot.Bot(TG_BOT_TOKEN)
+    tp_updates_offset = 0
+    subscribed = set()
 
     while True:
         coros = [
@@ -282,7 +293,15 @@ async def main(loop):
         print (format_odds(site_odds))
 
         # print(format_odds(site_odds))
-        send_odds_to_telegram_chat(format_odds(site_odds), bot)
+        tp_updates_offset, sub, unsub = get_updates_from_bot(bot, offset=tp_updates_offset)
+        subscribed |= sub
+        subscribed -= unsub
+
+        print('Subscribed: {}'.format(subscribed))
+
+        for chat_id in subscribed:
+            print ("Sending: {}".format(site_odds))
+            telepot_bot.sendMessage(chat_id, format_odds(site_odds))
 
         # chat_ids = await tg_bot.get_bot_updates()
         # print(chat_ids)
