@@ -11,7 +11,7 @@ from bs4 import BeautifulSoup
 from lxml import etree
 
 TG_BOT_TOKEN = '350060259:AAGXwhskIaiPFBVlKwop_atIcKFY62dZSLs'
-FETCH_INTERVAL = 5 # seconds
+FETCH_INTERVAL = 60 # seconds
 CACHE_FILE = 'cache.dbm'
 
 url_1 = 'http://sports.williamhill.com/bet/en-gb/betting/e/10810406/UEFA+Champions+League+-+To+Reach+The+Final.html'
@@ -173,8 +173,8 @@ def get_updates_from_bot(telepot_bot, offset=0):
 #    ids = list(set(existing_ids + ids_from_updates))
 #    chat_ids_store['ids'] = json.dumps(ids)
     ids = list(set(ids_from_updates))
-    subscribes = set([i for i, msg in ids_msg if msg == 'start'])
-    unsubscribes = set([i for i, msg in ids_msg if msg == 'stop'])
+    subscribes = set([i for i, msg in ids_msg if msg.lower() == '/start'])
+    unsubscribes = set([i for i, msg in ids_msg if msg.lower() == '/stop'])
     print ("Subscribes: {}".format(subscribes))
     print ("Unsubscribes: {}".format(unsubscribes))
 
@@ -301,7 +301,7 @@ async def main(loop):
 
         for chat_id in subscribed:
             print ("Sending: {}".format(site_odds))
-            telepot_bot.sendMessage(chat_id, format_odds(site_odds))
+            bot.sendMessage(chat_id, format_odds(site_odds))
 
         # chat_ids = await tg_bot.get_bot_updates()
         # print(chat_ids)
