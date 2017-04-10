@@ -2,6 +2,7 @@ import aiohttp
 import asyncio
 import async_timeout
 import concurrent
+import dbm
 import dryscrape
 import json
 import telepot
@@ -10,6 +11,8 @@ from bs4 import BeautifulSoup
 from lxml import etree
 
 TG_BOT_TOKEN = '350060259:AAGXwhskIaiPFBVlKwop_atIcKFY62dZSLs'
+FETCH_INTERVAL = 5 # seconds
+CACHE_FILE = 'cache.dbm'
 
 url_1 = 'http://sports.williamhill.com/bet/en-gb/betting/e/10810406/UEFA+Champions+League+-+To+Reach+The+Final.html'
 url_2 = 'http://www.paddypower.com/football/euro-football/champions-league'
@@ -27,9 +30,9 @@ command_mappings = {
     'Juventus': ['Juventus'],
     'Leicester': ['Leicester', 'LeicesterCity'],
     'Barcelona': ['Barcelona'],
-    'RealMadrid': ['RealMadrid'],
-    'AtleticoMadrid': ['AtleticoMadrid'],
-    'Dortmund': ['Dortmund', 'B.Dortmund', 'BorussiaDortmund'],
+    'RealMadrid': ['RealMadrid', 'Real Madrid'],
+    'AtleticoMadrid': ['AtleticoMadrid', 'Atletico Madrid'],
+    'Dortmund': ['Dortmund', 'B.Dortmund', 'BorussiaDortmund', 'Borussia Dortmund'],
 }
 
 urls = [
@@ -43,7 +46,7 @@ urls = [
     url_8, # 'span', 'span', 'opp', 'odds' JSON should be parsed
 ]
 
-urls_with_data_in_html = {
+pages_with_data_in_html = {
     url_1: ('div', 'div', 'eventselection', 'eventprice'),
     url_2: ('span', 'span', 'odds-label', 'odds-value'),
     url_5: ('span', 'span', 'team-name', 'odd-val'),
@@ -53,7 +56,15 @@ urls_with_data_in_html = {
 
 pages_to_run_js = {
     url_3: ('span', 'span', 'app--market__entry__name', 'app--market__entry__value'),
-    url_8: ('div', 'div', 'eventselection', 'eventprice'),
+    url_8: ('span', 'span', 'opp', 'odds'),
+}
+
+pages_to_run_selenium = {
+    url_4,
+}
+
+pages_with_json = {
+    url_9,
 }
 
 def get_fqdn(url):
@@ -117,6 +128,8 @@ async def get_odds_with_selenium(url, executor):
             odds[value[0]] = value[1]
 
         site = get_fqdn(url)
+        print(odds)
+        site_odds = {}
         try:
             site_odds[site] = get_normalized_odds(odds)
         except KeyError as e:
@@ -125,7 +138,7 @@ async def get_odds_with_selenium(url, executor):
         driver.close()
         vdisplay.stop()
 
-        return parsed_html
+        return site_odds
 
     result = await loop.run_in_executor(executor, get_html, url)
     return result
@@ -146,25 +159,31 @@ async def get_parsed_html(url):
         parsed_html = BeautifulSoup(html, 'lxml')
         return parsed_html
 
-def send_odss_to_telegram_chat(odds, telepot_bot):
+def send_odds_to_telegram_chat(odds, telepot_bot):
     print(telepot_bot.getMe())
-    updates = telepot_bot.getUpdates()
-    print(updates)
-    ids = set(map(lambda x: x['message']['chat']['id'], updates))
-    print(ids)
-    for chat_id in ids:
-        telepot_bot.sendMessage(chat_id, json.dumps(odds))
+    with dbm.open(CACHE_FILE, 'c') as chat_ids_store:
+        existing_ids = json.loads(chat_ids_store.get('ids', '[]').decode())
+        updates = telepot_bot.getUpdates()
+        ids_from_updates = list(map(lambda x: x['message']['chat']['id'], updates))
+        ids = list(set(existing_ids + ids_from_updates))
+        chat_ids_store['ids'] = json.dumps(ids)
 
+    print(ids)
+    print(odds)
+    for chat_id in ids:
+        telepot_bot.sendMessage(chat_id, odds)
 
 async def get_odds_by_classnames(parsed_html, comm_tag, odd_tag, command_class, odd_class):
     odds = []
     commands = []
     for elem in parsed_html.body.findAll(odd_tag, attrs={'class':odd_class}):
-        odd = ''.join(elem.text.split())
+        elem = elem.replace_with('')
+        odd = ''.join(elem.text.strip().split())
         odds.append(odd)
 
     for elem in parsed_html.body.findAll(comm_tag, attrs={'class':command_class}):
-        command = ''.join(elem.text.split())
+        elem = elem.replace_with('')
+        command = ''.join(elem.text.strip().split())
         commands.append(command)
 
     return dict(zip(commands, odds))
@@ -191,34 +210,86 @@ async def get_odds_from_dryscape(url, tags, tp_executor):
         print ('Error on {}: {}'.format(site, e))
     return site_odds
 
+async def get_odds_from_json(url):
+    async with aiohttp.ClientSession(loop=loop) as session:
+        json_resp = await fetch(session, url)
+        parsed_json = json.loads(json_resp)
+
+        lc_index = next(index for (index, d) in enumerate(parsed_json) if d["categoryName"] == "Champions League")
+        teams = parsed_json[lc_index]['event'][0]['markets'][1]['selection']
+        odds = {team['name']:team['odds']['dec'] for team in teams}
+
+        site = get_fqdn(url)
+        site_odds = {}
+        try:
+            site_odds[site] = get_normalized_odds(odds)
+        except KeyError as e:
+            print ('Error on {}: {}'.format(site, e))
+        return site_odds
+
+def uk2eu(uk_odd):
+    # convert uk odds type e.g. "1/5" to euro odds type e.g. 1.20
+    values = uk_odd.split("/")
+    values = list(map(int, values))
+    euro = values[0] / values[1] + 1
+    return "{:.2f}".format(euro)
+
+def format_odds(site_odds):
+    """Returns str in format:
+    Site -> Command:odd|Command:odd|
+
+    """
+    formatted_odds = ''
+    for site, odds in site_odds.items():
+        formatted_site_odds = '{} -> '.format(site)
+        for key, val in odds.items():
+            try:
+                val = float(val)
+            except ValueError:
+                val = uk2eu(val)
+            site_odds[site][key] = val
+
+            formatted_odd = ':'.join([key, str(val)])
+            formatted_site_odds = '|'.join([formatted_site_odds, formatted_odd])
+        formatted_odds = '\n'.join([formatted_odds, formatted_site_odds])
+    return formatted_odds
+
 async def main(loop):
     tp_executor = concurrent.futures.ThreadPoolExecutor(max_workers=3)
-    #for url, tags in urls_with_data_in_html.items():
-    # for url, tags in pages_to_run_js.items():
-    coros = []
-    for url, tags in urls_with_data_in_html.items():
-        coros.append(get_odds_from_html(url, tags))
-    for url, tags in pages_to_run_js.items():
-        coros.append(get_odds_from_dryscape(url, tags, tp_executor))
+    bot = telepot.Bot(TG_BOT_TOKEN)
 
-    results = await asyncio.gather(*coros)
-    site_odds = {}
-    for result in results:
-        site_odds.update(result)
+    while True:
+        coros = [
+            get_odds_from_html(url, tags)
+            for url, tags in pages_with_data_in_html.items()
+        ] + [
+            get_odds_from_dryscape(url, tags, tp_executor)
+            for url, tags in pages_to_run_js.items()
+        ] + [
+            get_odds_with_selenium(url_4, tp_executor),
+            get_odds_from_json(url_9),
+        ]
 
-#    site_odds = await get_odds_with_selenium(url_4, tp_executor)
+        results = await asyncio.gather(*coros)
+        site_odds = {}
+        for result in results:
+            site_odds.update(result)
 
-    print(site_odds)
+#        site_odds = await get_odds_from_dryscape(url_8, pages_to_run_js[url_8], tp_executor)
+#        site_odds = await get_odds_with_selenium(url_4, tp_executor)
+        # js_odds = await get_odds_from_json(url_9)
+        # print(format_odds(js_odds))
+        print (format_odds(site_odds))
 
+        # print(format_odds(site_odds))
+        send_odds_to_telegram_chat(format_odds(site_odds), bot)
+
+        # chat_ids = await tg_bot.get_bot_updates()
+        # print(chat_ids)
+        # for chat_id in chat_ids:
+        #     await tg_bot.send_odds_to_telegram('blabla', chat_id)
+
+        await asyncio.sleep(FETCH_INTERVAL)
     # print(site_odds)
-    # bot = telepot.Bot(TG_BOT_TOKEN)
-    # send_odss_to_telegram_chat(site_odds, bot)
-
-    # tg_bot = TelegramBot()
-    # chat_ids = await tg_bot.get_bot_updates()
-    # print(chat_ids)
-    # for chat_id in chat_ids:
-    #     await tg_bot.send_odds_to_telegram('blabla', chat_id)
-
 loop = asyncio.get_event_loop()
 loop.run_until_complete(main(loop))
