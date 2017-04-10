@@ -39,7 +39,7 @@ urls = [
     url_1, # 'div', 'eventselection', 'eventprice'
     url_2, # 'span', 'odds-label', 'odds-value'
     url_3, # 'span', 'app--market__entry__name', 'app--market__entry__value' --> need to be run with dryscrape
-    url_4, # Fucking doesn't show what needed
+    url_4, # Fucking doesn't show what needed (run in selenium)
     url_5, # 'span', 'team-name', 'odd-val' (no slash values)
     url_6, # 'div', 'span', 'outrights-betting-title', 'odds-fractional'
     url_7, # 'span', 'span', 'seln-name', 'price frac' Gives more, but possible to select
@@ -270,45 +270,49 @@ async def main(loop):
     subscribed = set()
 
     while True:
-        coros = [
-            get_odds_from_html(url, tags)
-            for url, tags in pages_with_data_in_html.items()
-        ] + [
-            get_odds_from_dryscape(url, tags, tp_executor)
-            for url, tags in pages_to_run_js.items()
-        ] + [
-            get_odds_with_selenium(url_4, tp_executor),
-            get_odds_from_json(url_9),
-        ]
+        try:
+            coros = [
+                get_odds_from_html(url, tags)
+                for url, tags in pages_with_data_in_html.items()
+            ] + [
+                get_odds_from_dryscape(url, tags, tp_executor)
+                for url, tags in pages_to_run_js.items()
+            ] + [
+                get_odds_with_selenium(url_4, tp_executor),
+                get_odds_from_json(url_9),
+            ]
 
-        results = await asyncio.gather(*coros)
-        site_odds = {}
-        for result in results:
-            site_odds.update(result)
+            results = await asyncio.gather(*coros)
+            site_odds = {}
+            for result in results:
+                site_odds.update(result)
 
-#        site_odds = await get_odds_from_dryscape(url_8, pages_to_run_js[url_8], tp_executor)
-#        site_odds = await get_odds_with_selenium(url_4, tp_executor)
-        # js_odds = await get_odds_from_json(url_9)
-        # print(format_odds(js_odds))
-        print (format_odds(site_odds))
+    #        site_odds = await get_odds_from_dryscape(url_8, pages_to_run_js[url_8], tp_executor)
+    #        site_odds = await get_odds_with_selenium(url_4, tp_executor)
+            # js_odds = await get_odds_from_json(url_9)
+            # print(format_odds(js_odds))
+            print (format_odds(site_odds))
 
-        # print(format_odds(site_odds))
-        tp_updates_offset, sub, unsub = get_updates_from_bot(bot, offset=tp_updates_offset)
-        subscribed |= sub
-        subscribed -= unsub
+            # print(format_odds(site_odds))
+            tp_updates_offset, sub, unsub = get_updates_from_bot(bot, offset=tp_updates_offset)
+            subscribed |= sub
+            subscribed -= unsub
 
-        print('Subscribed: {}'.format(subscribed))
+            print('Subscribed: {}'.format(subscribed))
 
-        for chat_id in subscribed:
-            print ("Sending: {}".format(site_odds))
-            bot.sendMessage(chat_id, format_odds(site_odds))
+            for chat_id in subscribed:
+                print ("Sending: {}".format(site_odds))
+                bot.sendMessage(chat_id, format_odds(site_odds))
 
-        # chat_ids = await tg_bot.get_bot_updates()
-        # print(chat_ids)
-        # for chat_id in chat_ids:
-        #     await tg_bot.send_odds_to_telegram('blabla', chat_id)
+            # chat_ids = await tg_bot.get_bot_updates()
+            # print(chat_ids)
+            # for chat_id in chat_ids:
+            #     await tg_bot.send_odds_to_telegram('blabla', chat_id)
 
-        await asyncio.sleep(FETCH_INTERVAL)
+            await asyncio.sleep(FETCH_INTERVAL)
+        # This is very very BAD THING!!!! But demo server will be more reliable :)
+        except:
+            pass
     # print(site_odds)
 loop = asyncio.get_event_loop()
 loop.run_until_complete(main(loop))
