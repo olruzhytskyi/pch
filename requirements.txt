@@ -15,4 +15,4 @@ urllib3==1.20
 webkit-server==1.0
 xvfbwrapper==0.2.9
 yarl==0.10.0
-selenium==2.53.0
+selenium==2.53.1
