@@ -5,7 +5,7 @@ beautifulsoup4==4.5.3
 cchardet==2.0.0
 chardet==2.3.0
 dryscrape==1.0
-lxml==3.7.3
+lxml==4.9.1
 multidict==2.1.4
 packaging==16.8
 pyparsing==2.2.0
